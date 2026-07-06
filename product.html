@@ -234,10 +234,32 @@
   <script>
     let prodArray = [];
 
-    // prodArray is the single source of truth. The cart is just the products
-    // whose `added` flag is true, so the two can never get out of sync.
+    // prodArray is the single source of truth. Cart items use `cartQty`; available
+    // stock stays in `prodQuantity` and updates when cart quantity changes.
     function getCart() {
-      return prodArray.filter(p => p.added);
+      return prodArray.filter(p => getCartQty(p) > 0);
+    }
+
+    function getCartQty(product) {
+      return Number(product.cartQty) || 0;
+    }
+
+    function getTotalCartItems() {
+      return getCart().reduce((sum, p) => sum + getCartQty(p), 0);
+    }
+
+    function normalizeCartData() {
+      prodArray.forEach(p => {
+        if (p.added && !getCartQty(p)) {
+          p.cartQty = 1;
+        }
+        if (!getCartQty(p)) {
+          p.cartQty = 0;
+          p.added = false;
+        } else {
+          p.added = true;
+        }
+      });
     }
 
     // localStorage can only hold strings, so we stringify when saving...
@@ -248,6 +270,7 @@
     // ...and parse back into real arrays when loading.
     function loadData() {
       prodArray = JSON.parse(localStorage.getItem("prodArray")) || [];
+      normalizeCartData();
     }
 
     function showToast(message, type = "success") {
@@ -322,7 +345,7 @@
       for (let i = 0; i < prodArray.length; i++) {
         if (term && !prodArray[i].prodName.toLowerCase().includes(term)) continue;
         visibleCount++;
-        const added = prodArray[i].added;
+        const added = getCartQty(prodArray[i]) > 0;
         prodcard.innerHTML += `
 <div class="col-md-4">
   <div class="card product-card border-0 rounded-4 shadow-sm h-100">
@@ -399,8 +422,8 @@
     function addCart(index) {
       let product = prodArray[index];
 
-      let error = product.added
-        ? "Item already in cart!"
+      let error = getCartQty(product) > 0
+        ? "Item already in cart! Edit quantity in cart."
         : Number(product.prodQuantity) <= 0
           ? "Out of stock!"
           : "";
@@ -411,6 +434,7 @@
       }
 
       product.prodQuantity = Number(product.prodQuantity) - 1;
+      product.cartQty = 1;
       product.added = true;
 
       showToast("Added to cart");
@@ -420,12 +444,13 @@
       displayCart();
     }
 
-    function displayCart(search = "") {
+    function displayCart() {
       const cartBody = document.getElementById("cartBody");
       const cart = getCart();
+      const totalItems = getTotalCartItems();
 
-      document.getElementById("cartCount").textContent = cart.length;
-      document.getElementById("navCartCount").textContent = cart.length;
+      document.getElementById("cartCount").textContent = totalItems;
+      document.getElementById("navCartCount").textContent = totalItems;
 
       if (cart.length === 0) {
         cartBody.innerHTML = `<p class="text-muted mb-0">Your cart is empty.</p>`;
@@ -433,49 +458,83 @@
       }
 
       cartBody.innerHTML = "";
-      // Loop prodArray so the delete button knows the product's real index.
       for (let i = 0; i < prodArray.length; i++) {
-        if (!prodArray[i].added) continue;
+        const qty = getCartQty(prodArray[i]);
+        if (!qty) continue;
         cartBody.innerHTML += `
-            <div class="d-flex align-items-center gap-3 border-bottom py-2">
+            <div class="d-flex align-items-center gap-2 border-bottom py-3">
               <img src="${prodArray[i].prodImage}" alt="" width="50" height="50" class="rounded" style="object-fit:cover;">
-              <span class="fw-semibold flex-grow-1">${prodArray[i].prodName}</span>
-              <span class="text-muted">$${prodArray[i].prodPrice}</span>
-              <button class="btn btn-success btn-sm rounded-pill px-3" onclick="editCart(${i})">
-              <i class="bi bi-pencil"></i>
+              <div class="flex-grow-1">
+                <div class="fw-semibold">${prodArray[i].prodName}</div>
+                <div class="text-muted small">$${prodArray[i].prodPrice} each</div>
+              </div>
+              <div class="d-flex align-items-center gap-1">
+                <button class="btn btn-outline-secondary btn-sm" onclick="changeCartQty(${i}, -1)" aria-label="Decrease quantity">−</button>
+                <input type="number" min="1" class="form-control form-control-sm text-center"
+                  style="width: 4rem;" value="${qty}"
+                  onchange="updateCartQty(${i}, this.value)"
+                  aria-label="Cart quantity for ${prodArray[i].prodName}">
+                <button class="btn btn-outline-secondary btn-sm" onclick="changeCartQty(${i}, 1)" aria-label="Increase quantity">+</button>
+              </div>
+              <button class="btn btn-danger btn-sm rounded-pill px-2" onclick="deleteCart(${i})" aria-label="Remove from cart">
+                <i class="bi bi-trash"></i>
               </button>
-              <button class="btn btn-danger btn-sm rounded-pill px-3" onclick="deleteCart(${i})">
-            <i class="bi bi-trash"></i>
-          </button>
             </div>`;
       }
     }
-    function deleteCart(index) {
-      console.log(index);
 
+    function changeCartQty(index, delta) {
       const item = prodArray[index];
-      item.added = false;
-      item.prodQuantity = Number(item.prodQuantity) + 1;
-      showToast(`${item.prodName} removed from cart`,"error");
+      updateCartQty(index, getCartQty(item) + delta);
+    }
 
+    function updateCartQty(index, newQty) {
+      const item = prodArray[index];
+      const oldQty = getCartQty(item);
+      newQty = Math.floor(Number(newQty));
+
+      if (!oldQty) return;
+
+      if (isNaN(newQty) || newQty < 1) {
+        showToast("Quantity must be at least 1", "error");
+        displayCart();
+        return;
+      }
+
+      const delta = newQty - oldQty;
+
+      if (delta > 0) {
+        const available = Number(item.prodQuantity);
+        if (available < delta) {
+          showToast(`Only ${available} more available in stock`, "error");
+          displayCart();
+          return;
+        }
+        item.prodQuantity = available - delta;
+      } else if (delta < 0) {
+        item.prodQuantity = Number(item.prodQuantity) + (-delta);
+      }
+
+      item.cartQty = newQty;
+      item.added = true;
+
+      showToast("Cart quantity updated");
       saveData();
       displayProd();
       displayCart();
     }
-    function editCart(index) {
-      console.log(index);
 
-      let item = prodArray[index];
-      item.prodQuantity = prompt("Product quantity to edit?", item.prodQuantity);
-      if(item.prodQuantity <= 0) {
-        showToast("Product quantity cannot be less than 0", "error");
-        return;
-      }
-      product.prodQuantity = Number(product.prodQuantity) - item.prodQuantity;
-      showToast("Product quantity updated", "success");
+    function deleteCart(index) {
+      const item = prodArray[index];
+      const qty = getCartQty(item);
+      item.prodQuantity = Number(item.prodQuantity) + qty;
+      item.cartQty = 0;
+      item.added = false;
+      showToast(`${item.prodName} removed from cart`, "error");
+
       saveData();
       displayProd();
-      displayCart();  
+      displayCart();
     }
     function searchProd() {
       displayProd(document.getElementById("searchProd").value);
