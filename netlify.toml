@@ -1,0 +1,12 @@
+# Netlify configuration for Product Lister
+# Static site: no build step needed. Files live at the repo root.
+
+[build]
+  publish = "."
+  command = ""
+
+# Serve the product page at the site root.
+[[redirects]]
+  from = "/"
+  to = "/product.html"
+  status = 200
